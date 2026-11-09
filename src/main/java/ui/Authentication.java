@@ -1,120 +1,106 @@
 package com.scc.ui;
 
+import com.scc.dao.ActivityLogDao;
 import com.scc.dao.UserDao;
 import com.scc.model.User;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
 
 public class Authentication {
 
-    // Replace with the roles from Section 2 of your approved proposal.
-    private static final List<String> ROLES = List.of("ADMIN", "ASSET_MANAGER", "DISTRIBUTION_OFFICER");
+    private static final String SYSTEM_TITLE = "EXCHANGE ASSET & DISTRIBUTION MANAGEMENT SYSTEM";
 
-    private final Scanner scanner;
     private final UserDao userDao;
+    private final ActivityLogDao logDao;
+    private final AdminMenu adminMenu;
+    private final Scanner scanner;
 
-    public Authentication(Scanner scanner, UserDao userDao) {
-        this.scanner = scanner;
+    public Authentication(UserDao userDao, ActivityLogDao logDao, AdminMenu adminMenu, Scanner scanner) {
         this.userDao = userDao;
+        this.logDao = logDao;
+        this.adminMenu = adminMenu;
+        this.scanner = scanner;
     }
 
     public void start() {
         boolean running = true;
-        while (running) {
-            System.out.println("\n===== EXCHANGE ASSET & DISTRIBUTION MANAGEMENT SYSTEM =====");
-            System.out.println("[1] Register");
-            System.out.println("[2] Login");
-            System.out.println("[3] Exit");
-            System.out.print("Enter choice: ");
 
-            switch (scanner.nextLine().trim()) {
-                case "1" -> register();
-                case "2" -> login();
-                case "3" -> {
-                    System.out.println("Exiting system... Thank you!");
-                    running = false;
-                }
-                default -> System.out.println("Invalid choice. Please enter 1, 2, or 3.");
+        while (running) {
+            System.out.println("\n" + "=".repeat(60));
+            System.out.println("  " + SYSTEM_TITLE + " LOGIN");
+            System.out.println("=".repeat(60));
+            System.out.println("1. Login");
+            System.out.println("2. Register");
+            System.out.println("3. Exit");
+            System.out.print("Choose an option: ");
+
+            String choice = scanner.nextLine().trim();
+
+            switch (choice) {
+                case "1" -> login();
+                case "2" -> register();
+                case "3" -> running = false;
+                default -> System.out.println("Invalid option. Try again.");
             }
         }
+        System.out.println("Goodbye!");
     }
 
     private void register() {
-        System.out.println("\n--- REGISTER ---");
-        System.out.print("Enter Username: ");
+        System.out.print("Choose a username: ");
         String username = scanner.nextLine().trim();
-        if (username.isEmpty()) {
-            System.out.println("Username cannot be empty.");
-            return;
-        }
-        if (userDao.usernameExists(username)) {
-            System.out.println("Username already taken.");
-            return;
-        }
-
-        System.out.print("Enter Password: ");
+        System.out.print("Choose a password: ");
         String password = scanner.nextLine();
-        if (password.isEmpty()) {
-            System.out.println("Password cannot be empty.");
+
+        if (username.isEmpty() || password.isEmpty()) {
+            System.out.println("Username and password cannot be empty.");
             return;
         }
-
-        String role = selectRole();
-
-        if (userDao.register(username, password, role)) {
-            System.out.println("SUCCESS: Account registered as " + role + " (Status: PENDING).");
+        if (userDao.register(username, password)) {
+            System.out.println("Registered! Wait for an admin to approve your account.");
         } else {
-            System.out.println("ERROR: Registration failed.");
-        }
-    }
-
-    private String selectRole() {
-        while (true) {
-            System.out.println("Select role:");
-            for (int i = 0; i < ROLES.size(); i++) {
-                System.out.println("[" + (i + 1) + "] " + ROLES.get(i));
-            }
-            System.out.print("Enter choice: ");
-            String input = scanner.nextLine().trim();
-            try {
-                int index = Integer.parseInt(input) - 1;
-                if (index >= 0 && index < ROLES.size()) {
-                    return ROLES.get(index);
-                }
-            } catch (NumberFormatException ignored) {
-                // fall through to the error message
-            }
-            System.out.println("Invalid role choice.");
+            System.out.println("Registration failed (username may already exist).");
         }
     }
 
     private void login() {
-        System.out.println("\n--- LOGIN ---");
-        System.out.print("Enter Username: ");
+        System.out.print("Username: ");
         String username = scanner.nextLine().trim();
-        System.out.print("Enter Password: ");
+        System.out.print("Password: ");
         String password = scanner.nextLine();
 
-        Optional<User> user = userDao.login(username, password);
-        if (user.isEmpty()) {
+        Optional<User> result = userDao.authenticate(username, password);
+        if (result.isEmpty()) {
             System.out.println("Invalid username or password.");
             return;
         }
-        if (!"APPROVED".equals(user.get().status())) {
-            System.out.println("Your account is " + user.get().status() + ". Please wait for admin approval.");
+
+        User user = result.get();
+        if (!"APPROVED".equals(user.status())) {
+            System.out.println("Your account is " + user.status() + ". Contact an admin.");
             return;
         }
-        routeByRole(user.get());
+
+        // Mandatory event 1a: login
+        logDao.logAction(user.id(), "USER_LOGIN",
+                String.format("User %s (ID: %d) logged in.", user.username(), user.id()));
+        System.out.println("Welcome, " + user.username() + " (" + user.role() + ")!");
+
+        if ("ADMIN".equals(user.role())) {
+            adminMenu.start(user);
+        } else {
+            System.out.print("You are logged in. Press Enter to log out...");
+            scanner.nextLine();
+        }
+
+        logout(user);
     }
 
-    private void routeByRole(User user) {
-        switch (user.role()) {
-            case "ADMIN" -> new AdminMenu(scanner, userDao, user).show();
-            case "ASSET_MANAGER" -> new RoleMenu("ASSET MANAGER MENU", scanner, userDao, user).show();
-            case "DISTRIBUTION_OFFICER" -> new RoleMenu("DISTRIBUTION OFFICER MENU", scanner, userDao, user).show();
-            default -> System.out.println("No menu available for role: " + user.role());
-        }
+    // Mandatory event 1b: logout
+    private void logout(User user) {
+        logDao.logAction(user.id(), "USER_LOGOUT",
+                String.format("User %s (ID: %d) logged out.", user.username(), user.id()));
+        System.out.println("Logged out.");
     }
 }

@@ -1,198 +1,201 @@
 package com.scc.ui;
 
+import com.scc.dao.ActivityLogDao;
+import com.scc.dao.AssetDao;
 import com.scc.dao.UserDao;
+import com.scc.model.ActivityLog;
 import com.scc.model.User;
 
 import java.util.List;
 import java.util.Scanner;
+import java.util.Set;
 
 public class AdminMenu {
 
-    // Keep in sync with the roles in Authentication.java
-    private static final List<String> ROLES = List.of("ADMIN", "ASSET_MANAGER", "DISTRIBUTION_OFFICER");
-    private static final List<String> STATUSES = List.of("APPROVED", "PENDING");
+    private static final Set<String> ROLES = Set.of("ADMIN", "TEACHER", "STUDENT");
+    private static final Set<String> STATUSES = Set.of("PENDING", "APPROVED", "REJECTED");
+    private static final Set<String> ASSET_STATUSES = Set.of("AVAILABLE", "RESERVED", "DISTRIBUTED", "DAMAGED");
+    private static final String LOG_FORMAT = "%-5s | %-8s | %-18s | %-35s | %-20s%n";
 
-    // Column widths: ID, Username, Role, Status
-    private static final String BORDER = "+" + "-".repeat(7) + "+" + "-".repeat(17)
-            + "+" + "-".repeat(24) + "+" + "-".repeat(12) + "+";
-    private static final String ROW_FORMAT = "| %-5s | %-15s | %-22s | %-10s |%n";
-
-    private final Scanner scanner;
     private final UserDao userDao;
-    private final User admin;
+    private final ActivityLogDao logDao;
+    private final AssetDao assetDao;
+    private final Scanner scanner;
 
-    public AdminMenu(Scanner scanner, UserDao userDao, User admin) {
-        this.scanner = scanner;
+    public AdminMenu(UserDao userDao, ActivityLogDao logDao, AssetDao assetDao, Scanner scanner) {
         this.userDao = userDao;
-        this.admin = admin;
+        this.logDao = logDao;
+        this.assetDao = assetDao;
+        this.scanner = scanner;
     }
 
-    public void show() {
-        System.out.println("\nWelcome, " + admin.username() + "!");
+    public void start(User admin) {
+        boolean running = true;
 
-        boolean loggedIn = true;
-        while (loggedIn) {
-            System.out.println("\n" + "=".repeat(50));
-            System.out.println("                ADMIN MENU");
-            System.out.println("=".repeat(50));
-            System.out.println("[1] View All System Users");
-            System.out.println("[2] View Pending Registrations");
-            System.out.println("[3] Approve User Account");
-            System.out.println("[4] Update User Role & Status");
-            System.out.println("[5] Logout");
-            System.out.println("=".repeat(50));
+        while (running) {
+            System.out.println("\n===== ADMIN MENU =====");
+            System.out.println("1. Approve Pending Accounts");
+            System.out.println("2. Update User Role/Status");
+            System.out.println("3. Add Asset");
+            System.out.println("4. Exchange / Distribute Asset");
+            System.out.println("5. Update Asset Status");
+            System.out.println("6. View System Audit Logs");   // [NEW]
+            System.out.println("7. Logout");
+            System.out.print("Choose an option: ");
 
-            int choice = readIntInput("Enter choice: ");
+            String choice = scanner.nextLine().trim();
+
             switch (choice) {
-                case 1 -> viewAllUsers();
-                case 2 -> viewPendingUsers();
-                case 3 -> approveUser();
-                case 4 -> updateUser();
-                case 5 -> {
-                    System.out.println("Logged out successfully.");
-                    loggedIn = false;
-                }
-                default -> System.out.println("Invalid choice. Please enter 1 to 5.");
+                case "1" -> approveAccounts(admin);
+                case "2" -> updateUser(admin);
+                case "3" -> addAsset(admin);
+                case "4" -> exchangeAsset(admin);
+                case "5" -> updateAssetStatus(admin);
+                case "6" -> viewAuditLogs();
+                case "7" -> running = false;
+                default -> System.out.println("Invalid option. Try again.");
             }
         }
     }
 
-    private void viewAllUsers() {
-        System.out.println("\n--- ALL SYSTEM USERS ---");
-        printUserTable(userDao.getAllUsers());
-    }
+    // ---------- Account management ----------
 
-    private void viewPendingUsers() {
-        System.out.println("\n--- PENDING REGISTRATIONS ---");
-        printUserTable(userDao.getPendingUsers());
-    }
-
-    private void approveUser() {
-        System.out.println("\n--- APPROVE USER ACCOUNT ---");
+    private void approveAccounts(User admin) {
         List<User> pending = userDao.getPendingUsers();
         if (pending.isEmpty()) {
-            System.out.println("No pending accounts to approve.");
+            System.out.println("No pending accounts.");
             return;
         }
-        printUserTable(pending);
+        System.out.println("Pending accounts:");
+        for (User u : pending) {
+            System.out.printf("  ID %d - %s%n", u.id(), u.username());
+        }
+        Integer id = readInt("Enter User ID to approve: ");
+        if (id == null) return;
 
-        while (true) {
-            int targetId = readIntInput("Enter Target User ID to approve (0 to cancel): ");
-            if (targetId == 0) {
-                System.out.println("Approval cancelled.");
-                return;
-            }
-            boolean isPending = pending.stream().anyMatch(u -> u.id() == targetId);
-            if (!isPending) {
-                System.out.println("ID " + targetId + " is not in the pending list. Try again.");
-                continue;
-            }
-            if (userDao.approveUser(targetId)) {
-                System.out.println("SUCCESS: User ID " + targetId + " has been approved!");
-            } else {
-                System.out.println("ERROR: Could not approve user ID " + targetId + ".");
-            }
+        System.out.println(userDao.approveUser(admin.id(), id) ? "Account approved." : "User not found.");
+    }
+
+    private void updateUser(User admin) {
+        Integer id = readInt("Enter User ID: ");
+        if (id == null) return;
+
+        System.out.print("New role (ADMIN/TEACHER/STUDENT): ");
+        String role = scanner.nextLine().trim().toUpperCase();
+        System.out.print("New status (PENDING/APPROVED/REJECTED): ");
+        String status = scanner.nextLine().trim().toUpperCase();
+
+        if (!ROLES.contains(role) || !STATUSES.contains(status)) {
+            System.out.println("Invalid role or status.");
             return;
+        }
+        System.out.println(userDao.updateUserRoleAndStatus(admin.id(), id, role, status)
+                ? "User updated." : "User not found.");
+    }
+
+    // ---------- Domain actions: Exchange Asset & Distribution ----------
+
+    private void addAsset(User admin) {
+        System.out.print("Asset name: ");
+        String name = scanner.nextLine().trim();
+        Integer qty = readInt("Quantity: ");
+        if (name.isEmpty() || qty == null || qty < 0) {
+            System.out.println("Invalid asset details.");
+            return;
+        }
+        System.out.println(assetDao.addAsset(admin.id(), name, qty) ? "Asset added." : "Could not add asset.");
+    }
+
+    private void exchangeAsset(User admin) {
+        Integer assetId = readInt("Asset ID: ");
+        if (assetId == null) return;
+        System.out.print("Recipient: ");
+        String recipient = scanner.nextLine().trim();
+        Integer qty = readInt("Quantity to distribute: ");
+        if (qty == null || recipient.isEmpty()) {
+            System.out.println("Recipient and quantity are required.");
+            return;
+        }
+        System.out.println(assetDao.exchangeAsset(admin.id(), assetId, recipient, qty)
+                ? "Asset distributed." : "Failed (check Asset ID and available stock).");
+    }
+
+    private void updateAssetStatus(User admin) {
+        Integer assetId = readInt("Asset ID: ");
+        if (assetId == null) return;
+        System.out.print("New status (AVAILABLE/RESERVED/DISTRIBUTED/DAMAGED): ");
+        String status = scanner.nextLine().trim().toUpperCase();
+        if (!ASSET_STATUSES.contains(status)) {
+            System.out.println("Invalid status.");
+            return;
+        }
+        System.out.println(assetDao.updateStatus(admin.id(), assetId, status)
+                ? "Asset status updated." : "Asset not found.");
+    }
+
+    // ---------- [NEW] Audit log interface ----------
+
+    private void viewAuditLogs() {
+        boolean back = false;
+
+        while (!back) {
+            System.out.println("\n===== SYSTEM AUDIT LOGS =====");
+            System.out.println("1. View All System Logs");
+            System.out.println("2. Filter Logs by User ID");
+            System.out.println("3. Back");
+            System.out.print("Choose an option: ");
+
+            String choice = scanner.nextLine().trim();
+
+            switch (choice) {
+                case "1" -> printLogs(logDao.getAllLogs());
+                case "2" -> {
+                    Integer userId = readInt("Enter User ID: ");
+                    if (userId != null) {
+                        printLogs(logDao.getLogsByUserId(userId));
+                    }
+                }
+                case "3" -> back = true;
+                default -> System.out.println("Invalid option. Try again.");
+            }
         }
     }
 
-    private void updateUser() {
-        System.out.println("\n--- UPDATE USER ROLE & STATUS ---");
-        List<User> users = userDao.getAllUsers();
-        printUserTable(users);
+    private void printLogs(List<ActivityLog> logs) {
+        System.out.println();
+        System.out.printf(LOG_FORMAT, "ID", "User ID", "Action Type", "Description", "Timestamp");
+        System.out.println("-".repeat(98));
 
-        int targetId;
-        while (true) {
-            targetId = readIntInput("Enter Target User ID (0 to cancel): ");
-            if (targetId == 0) {
-                System.out.println("Update cancelled.");
-                return;
-            }
-            final int id = targetId;
-            if (users.stream().noneMatch(u -> u.id() == id)) {
-                System.out.println("ID " + targetId + " does not exist. Try again.");
-                continue;
-            }
-            break;
-        }
-
-        if (targetId == admin.id()) {
-            System.out.println("WARNING: Modifying the currently active admin account is restricted.");
+        if (logs.isEmpty()) {
+            System.out.println("No logs found.");
             return;
         }
 
-        String newRole = readValidRole();
-        if (newRole == null) {
-            System.out.println("Update cancelled.");
-            return;
-        }
+        for (ActivityLog log : logs) {
+            String desc = log.description() == null ? "" : log.description();
+            int width = 35;
 
-        String newStatus = readValidStatus();
-        if (newStatus == null) {
-            System.out.println("Update cancelled.");
-            return;
-        }
+            System.out.printf(LOG_FORMAT, log.id(), log.userId(), log.actionType(),
+                    desc.substring(0, Math.min(width, desc.length())), log.timestamp());
 
-        if (userDao.updateUserRoleAndStatus(targetId, newRole, newStatus)) {
-            System.out.println("SUCCESS: User ID " + targetId + " updated to role "
-                    + newRole + " with status " + newStatus + ".");
-        } else {
-            System.out.println("ERROR: Update failed for user ID " + targetId + ".");
-        }
-    }
-
-    // ---------- Input validation wrappers ----------
-
-    private int readIntInput(String prompt) {
-        while (true) {
-            System.out.print(prompt);
-            String input = scanner.nextLine().trim();
-            try {
-                return Integer.parseInt(input);
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid input. Please enter a number.");
+            // long descriptions wrap onto extra rows so nothing is cut off
+            for (int i = width; i < desc.length(); i += width) {
+                System.out.printf(LOG_FORMAT, "", "", "",
+                        desc.substring(i, Math.min(i + width, desc.length())), "");
             }
         }
     }
 
-    private String readValidRole() {
-        while (true) {
-            System.out.print("Enter new role " + ROLES + " (0 to cancel): ");
-            String input = scanner.nextLine().trim().toUpperCase();
-            if (input.equals("0")) {
-                return null;
-            }
-            if (ROLES.contains(input)) {
-                return input;
-            }
-            System.out.println("Invalid role. Choose one of: " + ROLES);
-        }
-    }
+    // ---------- Input helpers: re-prompt instead of crashing ----------
 
-    private String readValidStatus() {
-        while (true) {
-            System.out.print("Enter new status " + STATUSES + " (0 to cancel): ");
-            String input = scanner.nextLine().trim().toUpperCase();
-            if (input.equals("0")) {
-                return null;
-            }
-            if (STATUSES.contains(input)) {
-                return input;
-            }
-            System.out.println("Invalid status. Choose one of: " + STATUSES);
+    private Integer readInt(String prompt) {
+        System.out.print(prompt);
+        String input = scanner.nextLine().trim();
+        try {
+            return Integer.parseInt(input);
+        } catch (NumberFormatException e) {
+            System.out.println("Invalid input. Please enter a whole number.");
+            return null;
         }
-    }
-
-    // ---------- Table helper ----------
-
-    private void printUserTable(List<User> users) {
-        System.out.println(BORDER);
-        System.out.printf(ROW_FORMAT, "ID", "USERNAME", "ROLE", "STATUS");
-        System.out.println(BORDER);
-        for (User u : users) {
-            System.out.printf(ROW_FORMAT, u.id(), u.username(), u.role(), u.status());
-        }
-        System.out.println(BORDER);
-        System.out.println("Total Records Displayed: " + users.size());
     }
 }
